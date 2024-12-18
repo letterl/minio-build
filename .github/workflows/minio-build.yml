@@ -1,42 +1,181 @@
-# .github/workflows/minio-build.yml
 name: MinIO Custom Build
 
 # 触发条件
 on:
-  workflow_dispatch:  # 手动触发
-  push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      minio_version:
+        description: 'MinIO Version to Build'
+        required: true
+        default: 'main'
+      go_version:
+        description: 'Go Version'
+        required: true
+        default: '1.20'
 
+  # 定时构建
+  schedule:
+    - cron: '0 0 * * *'  # 每天午夜构建
+
+  # 代码推送时触发
+  push:
+    branches: [ main ]
+    paths:
+      - 'go.mod'
+      - '**.go'
+
+  # PR 时触发
+  pull_request:
+    branches: [ main ]
+
+# 全局环境变量
+env:
+  MINIO_CI_CD: 1
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# 任务定义
 jobs:
   build:
+    # 运行环境
     runs-on: ubuntu-latest
-    
+
+    # 构建矩阵
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: darwin
+            arch: amd64
+          - os: windows
+            arch: amd64
+
+    # 步骤定义
     steps:
     # 检出代码
-    - uses: actions/checkout@v3
+    - name: Checkout MinIO Repository
+      uses: actions/checkout@v4
       with:
-        repository: minio/minio  # 直接拉取官方仓库
-        ref: main  # 指定分支
+        repository: 'minio/minio'
+        ref: ${{ github.event.inputs.minio_version || 'main' }}
+        fetch-depth: 1
 
-    # 设置 Go 环境
+    # 配置 Go 环境
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.20'
+        go-version: ${{ github.event.inputs.go_version || '1.20' }}
+        cache: false
+
+    # 配置 Git
+    - name: Configure Git
+      run: |
+        git config --global core.autocrlf false
+        git config --global core.longpaths true
+
+    # 安装依赖
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    # 缓存 Go 模块
+    - name: Cache Go Modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    # 下载依赖
+    - name: Download Dependencies
+      run: |
+        go mod download
+        go mod verify
 
     # 编译 MinIO
     - name: Build MinIO
       env:
-        MINIO_CI_CD: 1
+        GOOS: ${{ matrix.os }}
+        GOARCH: ${{ matrix.arch }}
+        CGO_ENABLED: 0
       run: |
-        go mod download
-        go build -o minio
+        # 生成版本信息
+        VERSION=$(git describe --tags --always --dirty)
+        BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        
+        go build -v \
+        -ldflags "-s -w \
+        -X github.com/minio/minio/cmd.Version=${VERSION} \
+        -X github.com/minio/minio/cmd.ReleaseTag=${VERSION} \
+        -X github.com/minio/minio/cmd.CommitID=$(git rev-parse HEAD) \
+        -X github.com/minio/minio/cmd.ShortCommitID=$(git rev-parse --short HEAD) \
+        -X github.com/minio/minio/cmd.BuildDate=${BUILD_DATE}" \
+        -o minio-${{ matrix.os }}-${{ matrix.arch }}
+
+    # 运行测试
+    - name: Run Tests
+      if: matrix.os == 'linux'  # 仅在 Linux 上运行测试
+      run: |
+        go test ./... -race -coverprofile=coverage.txt -covermode=atomic
 
     # 上传构建产物
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v3
       with:
-        name: minio-binary
-        path: minio
+        name: minio-${{ matrix.os }}-${{ matrix.arch }}
+        path: minio-${{ matrix.os }}-${{ matrix.arch }}
+        retention-days: 5
+
+    # 代码质量检查
+    - name: Code Quality Check
+      run: |
+        go vet ./...
+        go fmt ./...
+
+    # 安全扫描
+    - name: Security Scan
+      uses: securego/gosec@master
+      with:
+        args: ./...
+
+  # 创建 Release
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Download Artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          minio-linux-amd64/minio-linux-amd64
+          minio-darwin-amd64/minio-darwin-amd64
+          minio-windows-amd64/minio-windows-amd64
+        tag_name: v${{ github.event.inputs.minio_version }}
+        draft: false
+        prerelease: false
+
+# 错误通知
+on:
+  workflow_run:
+    workflows: ["MinIO Custom Build"]
+    types:
+      - completed
+
+jobs:
+  on-failure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - name: Notify Failure
+        run: |
+          echo "Build failed! Check the workflow logs for details."
