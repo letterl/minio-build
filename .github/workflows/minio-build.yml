@@ -1,0 +1,42 @@
+# .github/workflows/minio-build.yml
+name: MinIO Custom Build
+
+# 触发条件
+on:
+  workflow_dispatch:  # 手动触发
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 检出代码
+    - uses: actions/checkout@v3
+      with:
+        repository: minio/minio  # 直接拉取官方仓库
+        ref: main  # 指定分支
+
+    # 设置 Go 环境
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.20'
+
+    # 编译 MinIO
+    - name: Build MinIO
+      env:
+        MINIO_CI_CD: 1
+      run: |
+        go mod download
+        go build -o minio
+
+    # 上传构建产物
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: minio-binary
+        path: minio
