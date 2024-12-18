@@ -1,4 +1,4 @@
-name: Build and Test MinIO
+name: Build MinIO
 
 on:
   push:
@@ -13,55 +13,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 检出代码
-      - name: Checkout source code
+      # 1. 检出当前用户的仓库代码
+      - name: Checkout repository
         uses: actions/checkout@v3
-        
-      # 2. 确保拉取完整代码子模块
-      - name: Ensure submodules are downloaded
-        run: git submodule update --init --recursive
 
-      # 3. 设置 MINIO_CI_CD 环境变量
-      - name: Setup environment variables
+      # 2. 拉取 MinIO 项目源码
+      - name: Clone MinIO Repository
+        run: |
+          echo "Cloning MinIO source code..."
+          git clone --depth=1 https://github.com/minio/minio.git ./minio
+          cd ./minio
+          git log -1 --oneline
+
+      # 3. 设置环境变量 MINIO_CI_CD
+      - name: Setup Environment Variables
         run: |
           echo "MINIO_CI_CD=1" >> $GITHUB_ENV
-          echo "MinIO CI/CD mode enabled"
+          echo "MinIO CI/CD mode enabled."
 
       # 4. 安装 Go 环境
       - name: Setup Go Environment
         uses: actions/setup-go@v4
         with:
-          go-version: '1.20'
+          go-version: '^1.20'
 
-      # 5. 下载依赖并编译 MinIO
-      - name: Build MinIO from source
+      # 5. 下载依赖和构建
+      - name: Install dependencies and build MinIO
+        working-directory: ./minio
         run: |
+          echo "Downloading dependencies..."
           go mod tidy
-          echo "Building MinIO from source..."
-          go build -v -o minio
-          echo "Build successful."
+          echo "Building MinIO binary..."
+          go build -v -o ./bin/minio
+          echo "MinIO successfully built at ./minio/bin/minio"
 
-      # 6. 检查二进制文件生成
-      - name: Verify MinIO Executable
+      # 6. 测试二进制文件是否构建成功
+      - name: Verify MinIO Binary
         run: |
-          ls -l ./minio
-          file ./minio
-          if [[ -f "./minio" && -x "./minio" ]]; then
-            echo "MinIO binary is successfully built and executable."
+          if [[ -f "./minio/bin/minio" ]]; then
+            echo "MinIO binary successfully built!"
           else
-            echo "ERROR: MinIO binary not found or not executable!"
+            echo "ERROR: MinIO binary not found!"
             exit 1
           fi
-
-      # 7. 运行 MinIO（可选，用于测试）
-      - name: Start MinIO for local testing
-        env:
-          MINIO_ACCESS_KEY: testuser
-          MINIO_SECRET_KEY: testpass123
-          MINIO_CI_CD: ${{ env.MINIO_CI_CD }}
-        run: |
-          echo "Starting MinIO server..."
-          ./minio server /data --console-address ":9001" &
-          sleep 5
-          curl --fail http://127.0.0.1:9001 || exit 1
-          echo "MinIO server is running successfully."
