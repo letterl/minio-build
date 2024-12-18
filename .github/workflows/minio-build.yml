@@ -44,7 +44,7 @@ jobs:
           echo "Downloading dependencies..."
           go mod tidy
           echo "Building MinIO binary..."
-          go build -v -o ./bin/minio
+          CGO_ENABLED=0 go build -v -o ./bin/minio
           echo "MinIO successfully built at ./minio/bin/minio"
 
       # 6. 测试二进制文件是否构建成功
