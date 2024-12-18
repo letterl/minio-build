@@ -14,6 +14,10 @@ on:
         required: true
         default: '1.20'
 
+  # 定时构建
+  schedule:
+    - cron: '0 0 * * *'  # 每天午夜构建
+
   # 代码推送时触发
   push:
     branches: [ main ]
@@ -54,14 +58,14 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: 'minio/minio'
-        ref: ${{ github.event.inputs.minio_version || 'main' }}
+        ref: ${{ inputs.minio_version || 'main' }}
         fetch-depth: 1
 
     # 配置 Go 环境
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: ${{ github.event.inputs.go_version || '1.20' }}
+        go-version: ${{ inputs.go_version || '1.20' }}
         cache: false
 
     # 配置 Git
@@ -156,21 +160,16 @@ jobs:
           minio-linux-amd64/minio-linux-amd64
           minio-darwin-amd64/minio-darwin-amd64
           minio-windows-amd64/minio-windows-amd64
-        tag_name: v${{ github.event.inputs.minio_version }}
+        tag_name: v${{ inputs.minio_version }}
         draft: false
         prerelease: false
 
-# 错误通知
-on:
-  workflow_run:
-    workflows: ["MinIO Custom Build"]
-    types:
-      - completed
-
-jobs:
+  # 错误通知
   on-failure:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    # 仅在构建失败时运行
+    needs: [build, create-release]
+    if: failure()
     steps:
       - name: Notify Failure
         run: |
